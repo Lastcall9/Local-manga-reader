@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "local-manga-reader",
+    "name": "本地漫画",
     "slug": "local-manga-reader",
-    "version": "1.0.0",
+    "version": "1.0.8-delete-button-ui",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -10,6 +10,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.localmanga.reader",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
