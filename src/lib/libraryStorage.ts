@@ -10,7 +10,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   readerMode: 'scroll',
   themeMode: 'system',
   readingDirection: 'rtl',
-  imageFitMode: 'width',
   pageGapMode: 'none',
   librarySortMode: 'recent',
 };
@@ -42,7 +41,20 @@ export const saveProgress = async (progress: ProgressMap) => {
 export const loadSettings = async (): Promise<AppSettings> => {
   const rawSettings = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
 
-  return rawSettings ? { ...DEFAULT_SETTINGS, ...(JSON.parse(rawSettings) as Partial<AppSettings>) } : DEFAULT_SETTINGS;
+  if (!rawSettings) {
+    return DEFAULT_SETTINGS;
+  }
+
+  const storedSettings = JSON.parse(rawSettings) as Partial<AppSettings> & { librarySortMode?: string };
+  const librarySortMode = ['recent', 'name', 'pages'].includes(storedSettings.librarySortMode ?? '')
+    ? storedSettings.librarySortMode as AppSettings['librarySortMode']
+    : DEFAULT_SETTINGS.librarySortMode;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...storedSettings,
+    librarySortMode,
+  };
 };
 
 export const saveSettings = async (settings: AppSettings) => {

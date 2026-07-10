@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
-  InteractionManager,
   Modal,
   Pressable,
   ScrollView,
@@ -17,7 +16,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { radii, type ColorScheme } from '../styles/theme';
 import type {
-  ImageFitMode,
   PageGapMode,
   PageSize,
   ReaderMode,
@@ -78,9 +76,9 @@ const getCachedPageSizes = (pages: string[], persistedSizes: Record<string, Page
     return sizes;
   }, {});
 
-// 入参：章节页和恢复页。返回值：优先测量恢复页附近，再补齐全章。
-const getPriorityPageUris = (pages: string[], pageIndex: number) => {
-  const orderedUris: string[] = [];
+// 入参：章节页与当前页。返回：需要优先测量的附近页面。
+const getNearbyPageUris = (pages: string[], pageIndex: number) => {
+  const nearbyUris: string[] = [];
   const addedUris = new Set<string>();
   const safePageIndex = Math.min(pages.length - 1, Math.max(0, pageIndex));
   const addPage = (nextPageIndex: number) => {
@@ -90,7 +88,7 @@ const getPriorityPageUris = (pages: string[], pageIndex: number) => {
       return;
     }
 
-    orderedUris.push(uri);
+    nearbyUris.push(uri);
     addedUris.add(uri);
   };
 
@@ -99,27 +97,19 @@ const getPriorityPageUris = (pages: string[], pageIndex: number) => {
     addPage(safePageIndex - distance);
   }
 
-  pages.forEach((_, index) => addPage(index));
-
-  return orderedUris;
+  return nearbyUris;
 };
-
-// 入参：章节页和恢复页。返回值：进入阅读器首帧前需要优先测量的页面。
-const getNearbyPageUris = (pages: string[], pageIndex: number) =>
-  getPriorityPageUris(pages, pageIndex).slice(0, Math.min(pages.length, INITIAL_SIZE_PREFETCH_RADIUS * 2 + 1));
 
 type ReaderModalProps = {
   colors: ColorScheme;
   reader: ReaderState | null;
   readerMode: ReaderMode;
   readingDirection: ReadingDirection;
-  imageFitMode: ImageFitMode;
   pageGapMode: PageGapMode;
   onClose: () => void;
   onReaderChange: (reader: ReaderState) => void;
   onReaderModeChange: (mode: ReaderMode) => void;
   onReadingDirectionChange: (direction: ReadingDirection) => void;
-  onImageFitModeChange: (mode: ImageFitMode) => void;
   onPageGapModeChange: (mode: PageGapMode) => void;
   onPageSizeChange: (bookId: string, chapterIndex: number, uri: string, size: PageSize) => void;
   themeMode: ThemeMode;
@@ -133,13 +123,11 @@ export const ReaderModal = ({
   reader,
   readerMode,
   readingDirection,
-  imageFitMode,
   pageGapMode,
   onClose,
   onReaderChange,
   onReaderModeChange,
   onReadingDirectionChange,
-  onImageFitModeChange,
   onPageGapModeChange,
   onPageSizeChange,
   themeMode,
@@ -164,8 +152,9 @@ export const ReaderModal = ({
   const [visibleScrollPageIndex, setVisibleScrollPageIndex] = useState(reader?.pageIndex ?? 0);
   const [pageSizes, setPageSizes] = useState<Record<string, PageSize>>({});
   const activeChapter = reader ? reader.book.chapters[reader.chapterIndex] : null;
-  const chapterPagesKey = activeChapter ? activeChapter.pages.join('|') : '';
-  const chapterKey = reader && activeChapter ? `${reader.book.id}:${reader.chapterIndex}:${chapterPagesKey}` : '';
+  const chapterKey = reader && activeChapter
+    ? `${reader.book.id}:${activeChapter.id}:${activeChapter.pages.length}`
+    : '';
   const activeBookId = reader?.book.id ?? '';
   const activeChapterIndex = reader?.chapterIndex ?? 0;
   const pageGap = pageGapMode === 'none' ? 0 : pageGapMode === 'small' ? 8 : 16;
@@ -255,8 +244,9 @@ export const ReaderModal = ({
     }
 
     let isCancelled = false;
+    const nearbyUris = getNearbyPageUris(activeChapter.pages, visibleScrollPageIndex);
 
-    const measurePageSize = (uri: string) => {
+    nearbyUris.forEach((uri) => {
       if (pageSizeCache.has(uri)) {
         return;
       }
@@ -272,21 +262,12 @@ export const ReaderModal = ({
         },
         () => undefined,
       );
-    };
-    const nearbyUris = getNearbyPageUris(activeChapter.pages, restorePageIndex);
-    const nearbyUriSet = new Set(nearbyUris);
-    const remainingUris = activeChapter.pages.filter((uri) => !nearbyUriSet.has(uri));
-    const interactionHandle = InteractionManager.runAfterInteractions(() => {
-      remainingUris.forEach(measurePageSize);
     });
-
-    nearbyUris.forEach(measurePageSize);
 
     return () => {
       isCancelled = true;
-      interactionHandle.cancel();
     };
-  }, [chapterKey, readerMode]);
+  }, [activeChapter, readerMode, recordPageSize, visibleScrollPageIndex]);
 
   if (!reader || !activeChapter) {
     return null;
@@ -627,9 +608,6 @@ export const ReaderModal = ({
             )}
             <Text style={[styles.readerCount, { color: colors.readerMuted }]}>
               {visiblePageIndex + 1}/{chapter.pages.length} 页
-              {readerMode === 'scroll'
-                ? ` · 保存${reader.pageIndex + 1} · 恢复${restorePageIndex + 1}`
-                : ''}
             </Text>
             {readerMode === 'paged' ? (
               <Pressable
@@ -679,16 +657,6 @@ export const ReaderModal = ({
                   { label: '普通', value: 'ltr' },
                 ]}
                 onChange={onReadingDirectionChange}
-              />
-              <Text style={[styles.sheetLabel, { color: colors.textMuted }]}>图片适配</Text>
-              <SegmentedControl<ImageFitMode>
-                colors={colors}
-                value={imageFitMode}
-                options={[
-                  { label: '宽度', value: 'width' },
-                  { label: '高度', value: 'height' },
-                ]}
-                onChange={onImageFitModeChange}
               />
               <Text style={[styles.sheetLabel, { color: colors.textMuted }]}>页间距</Text>
               <SegmentedControl<PageGapMode>

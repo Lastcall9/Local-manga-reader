@@ -52,7 +52,7 @@ export const LibraryView = ({
       <View style={[styles.emptyState, { paddingBottom: bottomInset + 20 }]}>
         <Text style={[styles.emptyTitle, { color: colors.text }]}>选择漫画目录</Text>
         <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-          支持“漫画名/章节/图片”和“漫画名/图片”。开启隐私模式后相册不会继续索引漫画图片。
+          支持“漫画名/章节/图片”、“漫画名/图片”，也可将 ZIP/CBZ 放在根目录。隐私模式会阻止相册索引。
         </Text>
         <Pressable
           accessibilityRole="button"
@@ -71,7 +71,7 @@ export const LibraryView = ({
       {isScanning ? (
         <View style={[styles.scanBar, { backgroundColor: colors.primarySoft }]}>
           <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={[styles.scanText, { color: colors.primary }]}>正在刷新书架</Text>
+          <Text style={[styles.scanText, { color: colors.primary }]}>正在刷新书架，首次读取 ZIP/CBZ 可能较慢</Text>
         </View>
       ) : null}
       {continueBook && continueProgress ? (
@@ -111,7 +111,6 @@ export const LibraryView = ({
           {[
             { label: '最近', value: 'recent' },
             { label: '名称', value: 'name' },
-            { label: '进度', value: 'progress' },
             { label: '页数', value: 'pages' },
           ].map((option) => {
             const isActive = sortMode === option.value;

@@ -9,7 +9,10 @@ export type Chapter = {
   uri: string;
   pages: string[];
   pageSizes?: Record<string, PageSize>;
+  modifiedAt?: number;
 };
+
+export type BookSourceType = 'directory' | 'archive';
 
 export type Book = {
   id: string;
@@ -18,6 +21,8 @@ export type Book = {
   coverUri: string;
   pageCount: number;
   chapters: Chapter[];
+  sourceType?: BookSourceType;
+  archiveSignature?: string;
 };
 
 export type LibraryState = {
@@ -45,17 +50,14 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 
 export type ReadingDirection = 'ltr' | 'rtl';
 
-export type ImageFitMode = 'height' | 'width';
-
 export type PageGapMode = 'none' | 'small' | 'medium';
 
-export type LibrarySortMode = 'recent' | 'name' | 'progress' | 'pages';
+export type LibrarySortMode = 'recent' | 'name' | 'pages';
 
 export type AppSettings = {
   readerMode: ReaderMode;
   themeMode: ThemeMode;
   readingDirection: ReadingDirection;
-  imageFitMode: ImageFitMode;
   pageGapMode: PageGapMode;
   librarySortMode: LibrarySortMode;
 };

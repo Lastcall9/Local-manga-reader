@@ -7,6 +7,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { BookDetailModal } from './src/components/BookDetailModal';
 import { LibraryView } from './src/components/LibraryView';
 import { ReaderModal } from './src/components/ReaderModal';
+import { clearArchiveCache } from './src/lib/archiveCache';
 import { APP_VERSION } from './src/lib/appVersion';
 import { scanLibrary } from './src/lib/libraryScanner';
 import {
@@ -23,7 +24,6 @@ import { getColors, radii, resolveThemeMode } from './src/styles/theme';
 import type {
   AppSettings,
   Book,
-  ImageFitMode,
   LibrarySortMode,
   PageGapMode,
   PageSize,
@@ -87,6 +87,8 @@ function MangaReaderApp() {
   const [rootUri, setRootUri] = useState<string | null>(null);
   const [books, setBooks] = useState<Book[]>([]);
   const [progress, setProgress] = useState<ProgressMap>({});
+  const progressRef = useRef<ProgressMap>({});
+  const progressSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [reader, setReader] = useState<ReaderState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -131,24 +133,10 @@ function MangaReaderApp() {
       if (settings.librarySortMode === 'pages') {
         return right.pageCount - left.pageCount;
       }
+      const updatedAtDifference = (rightProgress?.updatedAt ?? 0) - (leftProgress?.updatedAt ?? 0);
 
-      if (settings.librarySortMode === 'progress') {
-        const leftRatio = leftProgress
-          ? (leftProgress.chapterIndex + leftProgress.pageIndex / Math.max(1, left.pageCount)) / left.chapters.length
-          : 0;
-        const rightRatio = rightProgress
-          ? (rightProgress.chapterIndex + rightProgress.pageIndex / Math.max(1, right.pageCount)) / right.chapters.length
-          : 0;
-
-        return rightRatio - leftRatio;
-      }
-
-      if (leftProgress && !rightProgress) {
-        return -1;
-      }
-
-      if (!leftProgress && rightProgress) {
-        return 1;
+      if (updatedAtDifference !== 0) {
+        return updatedAtDifference;
       }
 
       return left.title.localeCompare(right.title, undefined, { numeric: true, sensitivity: 'base' });
@@ -158,6 +146,16 @@ function MangaReaderApp() {
   const updateSettings = useCallback(async (nextSettings: AppSettings) => {
     setSettings(nextSettings);
     await saveSettings(nextSettings);
+  }, []);
+
+  // 入参：待保存的完整进度。副作用：按调用顺序写入，避免旧进度晚于新进度落盘。
+  const saveProgressInOrder = useCallback(async (nextProgress: ProgressMap) => {
+    const queuedSave = progressSaveQueue.current
+      .catch(() => undefined)
+      .then(() => saveProgress(nextProgress));
+
+    progressSaveQueue.current = queuedSave;
+    await queuedSave;
   }, []);
 
   const changeReaderMode = useCallback(
@@ -177,13 +175,6 @@ function MangaReaderApp() {
   const changeReadingDirection = useCallback(
     (readingDirection: ReadingDirection) => {
       void updateSettings({ ...settings, readingDirection });
-    },
-    [settings, updateSettings],
-  );
-
-  const changeImageFitMode = useCallback(
-    (imageFitMode: ImageFitMode) => {
-      void updateSettings({ ...settings, imageFitMode });
     },
     [settings, updateSettings],
   );
@@ -242,7 +233,8 @@ function MangaReaderApp() {
     await flushPendingLibrarySave();
 
     try {
-      const scannedBooks = await scanLibrary(nextRootUri);
+      const scanResult = await scanLibrary(nextRootUri, books);
+      const scannedBooks = scanResult.books;
       const nextPrivacyModeEnabled = await getPrivacyModeEnabled(nextRootUri);
       const nextBooks = mergeBooksWithCachedPageSizes(scannedBooks, books);
       const nextState = { rootUri: nextRootUri, books: nextBooks };
@@ -252,8 +244,16 @@ function MangaReaderApp() {
       setIsPrivacyModeEnabled(nextPrivacyModeEnabled);
       await saveLibrary(nextState);
 
-      if (nextBooks.length === 0) {
-        setErrorMessage('没有找到图片文件夹。请确认根目录下有 jpg、png、webp、gif 或 bmp 图片。');
+      if (scanResult.warnings.length > 0) {
+        const warningPreview = scanResult.warnings.slice(0, 3).join('\n');
+        const remainingWarningCount = Math.max(0, scanResult.warnings.length - 3);
+        const remainingWarningText = remainingWarningCount > 0 ? `\n另有 ${remainingWarningCount} 项` : '';
+
+        setErrorMessage(
+          `扫描完成，但有 ${scanResult.warnings.length} 项未更新：\n${warningPreview}${remainingWarningText}`,
+        );
+      } else if (nextBooks.length === 0) {
+        setErrorMessage('没有找到图片文件夹或 ZIP/CBZ。请确认目录结构和文件格式正确。');
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '扫描目录失败');
@@ -298,11 +298,12 @@ function MangaReaderApp() {
         const isDeletingRootBook = book.uri === rootUri;
         const nextRootUri = isDeletingRootBook ? null : rootUri;
         const nextBooks = isDeletingRootBook ? [] : books.filter((currentBook) => currentBook.id !== book.id);
-        const nextProgress = { ...progress };
+        const nextProgress = { ...progressRef.current };
         delete nextProgress[book.id];
 
         setRootUri(nextRootUri);
         setBooks(nextBooks);
+        progressRef.current = nextProgress;
         setProgress(nextProgress);
 
         if (isDeletingRootBook) {
@@ -319,13 +320,14 @@ function MangaReaderApp() {
 
         await Promise.all([
           saveLibrary({ rootUri: nextRootUri, books: nextBooks }),
-          saveProgress(nextProgress),
+          saveProgressInOrder(nextProgress),
+          book.sourceType === 'archive' ? clearArchiveCache(book.uri) : Promise.resolve(),
         ]);
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : `删除《${book.title}》失败`);
       }
     },
-    [books, flushPendingLibrarySave, progress, reader?.book.id, rootUri, selectedBook?.id],
+    [books, flushPendingLibrarySave, reader?.book.id, rootUri, saveProgressInOrder, selectedBook?.id],
   );
 
   // 入参：待删除书籍。副作用：二次确认后触发本地文件删除。
@@ -442,13 +444,13 @@ function MangaReaderApp() {
     openReader(continueEntry.book);
   }, [continueEntry, openReader]);
 
-  // 入参：新的阅读位置。副作用：更新 UI 状态并持久化每本书的阅读进度。
+  // 入参：新的阅读位置。副作用：更新 UI 状态并按顺序持久化每本书的阅读进度。
   const updateReaderPage = useCallback(
     async (nextReader: ReaderState) => {
       setReader(nextReader);
 
       const nextProgress = {
-        ...progress,
+        ...progressRef.current,
         [nextReader.book.id]: {
           chapterIndex: nextReader.chapterIndex,
           pageIndex: nextReader.pageIndex,
@@ -456,10 +458,16 @@ function MangaReaderApp() {
         },
       };
 
+      progressRef.current = nextProgress;
       setProgress(nextProgress);
-      await saveProgress(nextProgress);
+
+      try {
+        await saveProgressInOrder(nextProgress);
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : '保存阅读进度失败');
+      }
     },
-    [progress],
+    [saveProgressInOrder],
   );
 
   const goToNextPage = useCallback(async () => {
@@ -517,6 +525,7 @@ function MangaReaderApp() {
 
         setRootUri(storedLibrary.rootUri);
         setBooks(storedLibrary.books);
+        progressRef.current = storedProgress;
         setProgress(storedProgress);
         setSettings(storedSettings);
 
@@ -631,7 +640,6 @@ function MangaReaderApp() {
         reader={reader}
         readerMode={settings.readerMode}
         readingDirection={settings.readingDirection}
-        imageFitMode={settings.imageFitMode}
         pageGapMode={settings.pageGapMode}
         onClose={() => {
           void flushPendingLibrarySave();
@@ -640,7 +648,6 @@ function MangaReaderApp() {
         onReaderChange={(nextReader) => void updateReaderPage(nextReader)}
         onReaderModeChange={changeReaderMode}
         onReadingDirectionChange={changeReadingDirection}
-        onImageFitModeChange={changeImageFitMode}
         onPageGapModeChange={changePageGapMode}
         onPageSizeChange={updatePageSize}
         themeMode={settings.themeMode}
