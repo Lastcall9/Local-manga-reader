@@ -1,10 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
-import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +16,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { buildReaderPageLayouts, getReaderPageIndexAtOffset } from '../lib/readerLayout';
 import { radii, type ColorScheme } from '../styles/theme';
 import type {
   PageGapMode,
@@ -25,19 +28,11 @@ import type {
 } from '../types/library';
 import { SegmentedControl } from './SegmentedControl';
 
-const DEFAULT_SCROLL_PAGE_RATIO = 1.42;
 const DRAG_SCROLL_INTERVAL_MS = 40;
 const SIDE_PROGRESS_TOP_OFFSET = 88;
 const SIDE_PROGRESS_BOTTOM_OFFSET = 68;
 const SIDE_PROGRESS_THUMB_SIZE = 34;
-const INITIAL_SIZE_PREFETCH_RADIUS = 4;
 const PAGE_SIZE_CACHE_LIMIT = 1600;
-
-type PageLayout = {
-  index: number;
-  length: number;
-  offset: number;
-};
 
 const pageSizeCache = new Map<string, PageSize>();
 
@@ -76,30 +71,6 @@ const getCachedPageSizes = (pages: string[], persistedSizes: Record<string, Page
     return sizes;
   }, {});
 
-// 入参：章节页与当前页。返回：需要优先测量的附近页面。
-const getNearbyPageUris = (pages: string[], pageIndex: number) => {
-  const nearbyUris: string[] = [];
-  const addedUris = new Set<string>();
-  const safePageIndex = Math.min(pages.length - 1, Math.max(0, pageIndex));
-  const addPage = (nextPageIndex: number) => {
-    const uri = pages[nextPageIndex];
-
-    if (!uri || addedUris.has(uri)) {
-      return;
-    }
-
-    nearbyUris.push(uri);
-    addedUris.add(uri);
-  };
-
-  for (let distance = 0; distance <= INITIAL_SIZE_PREFETCH_RADIUS; distance += 1) {
-    addPage(safePageIndex + distance);
-    addPage(safePageIndex - distance);
-  }
-
-  return nearbyUris;
-};
-
 type ReaderModalProps = {
   colors: ColorScheme;
   reader: ReaderState | null;
@@ -137,7 +108,7 @@ export const ReaderModal = ({
 }: ReaderModalProps) => {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const scrollRef = useRef<FlashListRef<string>>(null);
+  const scrollRef = useRef<FlatList<string>>(null);
   const reportedPageSizeKeys = useRef(new Set<string>());
   const touchStart = useRef<{ x: number; y: number; time: number } | null>(null);
   const draggingPageIndex = useRef<number | null>(null);
@@ -152,9 +123,8 @@ export const ReaderModal = ({
   const [visibleScrollPageIndex, setVisibleScrollPageIndex] = useState(reader?.pageIndex ?? 0);
   const [pageSizes, setPageSizes] = useState<Record<string, PageSize>>({});
   const activeChapter = reader ? reader.book.chapters[reader.chapterIndex] : null;
-  const chapterKey = reader && activeChapter
-    ? `${reader.book.id}:${activeChapter.id}:${activeChapter.pages.length}`
-    : '';
+  const chapterPagesKey = activeChapter ? activeChapter.pages.join('|') : '';
+  const chapterKey = reader && activeChapter ? `${reader.book.id}:${reader.chapterIndex}:${chapterPagesKey}` : '';
   const activeBookId = reader?.book.id ?? '';
   const activeChapterIndex = reader?.chapterIndex ?? 0;
   const pageGap = pageGapMode === 'none' ? 0 : pageGapMode === 'small' ? 8 : 16;
@@ -163,34 +133,33 @@ export const ReaderModal = ({
   const progressTrackHeight = Math.max(1, height - progressTrackTop - progressTrackBottom);
   const progressThumbTravel = Math.max(1, progressTrackHeight - SIDE_PROGRESS_THUMB_SIZE);
   const getKnownPageSize = (uri: string) => pageSizes[uri] ?? pageSizeCache.get(uri) ?? activeChapter?.pageSizes?.[uri];
+  const restoreTarget = useRef({ chapterKey: '', pageIndex: 0 });
 
-  // 入参：图片原始尺寸。返回值：长滚动模式下按屏宽等比缩放后的 item 高度。
-  const getScaledPageHeight = (size: PageSize | undefined) => {
-    if (!size || size.width <= 0 || size.height <= 0) {
-      return Math.max(1, Math.round(width * DEFAULT_SCROLL_PAGE_RATIO)) + pageGap;
-    }
+  if (restoreTarget.current.chapterKey !== chapterKey) {
+    restoreTarget.current = {
+      chapterKey,
+      pageIndex: reader?.pageIndex ?? 0,
+    };
+  }
 
-    return Math.max(1, Math.round((width * size.height) / size.width)) + pageGap;
-  };
-
-  const pageLayouts = useMemo<PageLayout[]>(() => {
+  const restorePageIndex = restoreTarget.current.pageIndex;
+  const pageLayouts = useMemo(() => {
     const pages = activeChapter?.pages ?? [];
+    const knownSizes = pages.reduce<Record<string, PageSize>>((sizes, uri) => {
+      const size = getKnownPageSize(uri);
 
-    return pages.reduce<PageLayout[]>((layouts, uri, index) => {
-      const previousLayout = layouts[index - 1];
-      const offset = previousLayout ? previousLayout.offset + previousLayout.length : 0;
+      if (size) {
+        sizes[uri] = size;
+      }
 
-      layouts.push({
-        index,
-        length: getScaledPageHeight(getKnownPageSize(uri)),
-        offset,
-      });
+      return sizes;
+    }, {});
 
-      return layouts;
-    }, []);
+    return pages.every((uri) => Boolean(knownSizes[uri]))
+      ? buildReaderPageLayouts(pages, knownSizes, width, pageGap)
+      : [];
   }, [chapterKey, pageGap, pageSizes, width]);
-
-  const restorePageIndex = reader ? reader.pageIndex : 0;
+  const isRestoreLayoutReady = pageLayouts.length === (activeChapter?.pages.length ?? 0);
 
   // 入参：图片原始尺寸。副作用：更新内存尺寸缓存，并把变化上报给书库持久化。
   const recordPageSize = useCallback(
@@ -231,7 +200,8 @@ export const ReaderModal = ({
     setPreviewPageIndex(null);
     setVisibleScrollPageIndex(reader?.pageIndex ?? 0);
     committedVisiblePageIndex.current = reader?.pageIndex ?? 0;
-    setPageSizes(getCachedPageSizes(activeChapter?.pages ?? [], activeChapter?.pageSizes));
+    const cachedSizes = getCachedPageSizes(activeChapter?.pages ?? [], activeChapter?.pageSizes);
+    setPageSizes(cachedSizes);
     reportedPageSizeKeys.current.clear();
     setIsScrollListReady(readerMode !== 'scroll');
     draggingPageIndex.current = null;
@@ -244,9 +214,8 @@ export const ReaderModal = ({
     }
 
     let isCancelled = false;
-    const nearbyUris = getNearbyPageUris(activeChapter.pages, visibleScrollPageIndex);
 
-    nearbyUris.forEach((uri) => {
+    const measurePageSize = (uri: string) => {
       if (pageSizeCache.has(uri)) {
         return;
       }
@@ -262,12 +231,15 @@ export const ReaderModal = ({
         },
         () => undefined,
       );
-    });
+    };
+
+    // FlatList 的 getItemLayout 必须使用完整真实高度；提前只读取图片元数据，不解码整张图片。
+    activeChapter.pages.forEach(measurePageSize);
 
     return () => {
       isCancelled = true;
     };
-  }, [activeChapter, readerMode, recordPageSize, visibleScrollPageIndex]);
+  }, [chapterKey, readerMode, recordPageSize]);
 
   if (!reader || !activeChapter) {
     return null;
@@ -284,7 +256,7 @@ export const ReaderModal = ({
   const progressRatio = chapter.pages.length <= 1 ? 0 : visiblePageIndex / (chapter.pages.length - 1);
   const progressFillHeight = progressRatio * progressTrackHeight;
   const progressThumbTop = progressRatio * progressThumbTravel;
-  const isScrollReaderLoading = readerMode === 'scroll' && !isScrollListReady;
+  const isScrollReaderLoading = readerMode === 'scroll' && (!isRestoreLayoutReady || !isScrollListReady);
 
   const updateVisibleReadingPosition = (nextPageIndex: number) => {
     if (isScrubbingProgress.current) {
@@ -319,8 +291,20 @@ export const ReaderModal = ({
       return;
     }
 
-    // 进度条可能一次跨很多页，直接按估算 offset 跳转，避免未测量 item 的 index 跳转导致空白。
-    scrollRef.current?.scrollToOffset({ animated: false, offset: targetLayout.offset, viewPosition: 0 });
+    scrollRef.current?.scrollToOffset({ animated: false, offset: targetLayout.offset });
+  };
+
+  // 入参：原生滚动事件。副作用：只按同一份确定性布局表反算实际顶部页，不依赖列表估算的可见项。
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (isScrubbingProgress.current || pageLayouts.length === 0) {
+      return;
+    }
+
+    updateVisibleReadingPosition(getReaderPageIndexAtOffset(pageLayouts, event.nativeEvent.contentOffset.y));
+  };
+
+  const handleScrollListLayout = () => {
+    requestAnimationFrame(() => setIsScrollListReady(true));
   };
 
   const jumpToChapter = (chapterIndex: number) => {
@@ -470,17 +454,19 @@ export const ReaderModal = ({
             }}
             onTouchEnd={(event) => toggleOverlayOnTap(event.nativeEvent.pageX, event.nativeEvent.pageY)}
           >
-            <FlashList
+            {isRestoreLayoutReady ? (
+            <FlatList
+              key={chapterKey}
               ref={scrollRef}
               data={chapter.pages}
               extraData={pageSizes}
               initialScrollIndex={restorePageIndex}
-              initialScrollIndexParams={{ viewOffset: 0 }}
-              keyExtractor={(item) => item}
-              maintainVisibleContentPosition={{ disabled: true }}
-              onLoad={() => setIsScrollListReady(true)}
+              initialNumToRender={3}
+              getItemLayout={(_, index) => pageLayouts[index]}
+              keyExtractor={(_, index) => `${chapterKey}:${index}`}
+              onLayout={handleScrollListLayout}
               renderItem={({ item, index }) => {
-                const pageHeight = getScaledPageHeight(getKnownPageSize(item));
+                const pageHeight = pageLayouts[index].length;
 
                 return (
                   <View style={[styles.scrollPage, { height: pageHeight, paddingVertical: pageGap / 2, width }]}>
@@ -498,21 +484,15 @@ export const ReaderModal = ({
                   </View>
                 );
               }}
+              removeClippedSubviews={false}
               showsVerticalScrollIndicator={false}
+              onScroll={handleScroll}
+              scrollEventThrottle={32}
               onMomentumScrollEnd={commitVisibleReadingPosition}
               onScrollEndDrag={commitVisibleReadingPosition}
-              viewabilityConfig={{ itemVisiblePercentThreshold: 35, minimumViewTime: 80 }}
-              onViewableItemsChanged={({ viewableItems }) => {
-                const firstVisibleIndex = viewableItems
-                  .map((item) => item.index)
-                  .filter((index): index is number => typeof index === 'number')
-                  .sort((left, right) => left - right)[0];
-
-                if (firstVisibleIndex !== undefined) {
-                  updateVisibleReadingPosition(firstVisibleIndex);
-                }
-              }}
+              windowSize={5}
             />
+            ) : null}
             {isScrollReaderLoading ? (
               <View pointerEvents="none" style={styles.readerLoadingOverlay}>
                 <View style={styles.readerLoadingIndicator}>
@@ -608,6 +588,9 @@ export const ReaderModal = ({
             )}
             <Text style={[styles.readerCount, { color: colors.readerMuted }]}>
               {visiblePageIndex + 1}/{chapter.pages.length} 页
+              {readerMode === 'scroll'
+                ? ` · 保存${reader.pageIndex + 1} · 恢复${restorePageIndex + 1}`
+                : ''}
             </Text>
             {readerMode === 'paged' ? (
               <Pressable

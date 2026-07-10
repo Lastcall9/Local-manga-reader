@@ -2,7 +2,7 @@
   "expo": {
     "name": "本地漫画",
     "slug": "local-manga-reader",
-    "version": "1.0.9-zip-cbz-support",
+    "version": "1.0.13-reader-position-fix",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "versionCode": 9
+      "versionCode": 13
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -1,10 +1,9 @@
 {
   "name": "local-manga-reader",
-  "version": "1.0.9-zip-cbz-support",
+  "version": "1.0.13-reader-position-fix",
   "main": "index.ts",
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@shopify/flash-list": "^2.3.2",
     "expo": "~57.0.1",
     "expo-file-system": "~57.0.0",
     "expo-status-bar": "~57.0.0",
@@ -23,6 +22,7 @@
     "android": "expo run:android",
     "android:dev": "expo start --android",
     "apk": "build-release.cmd",
+    "test:reader-layout": "node --experimental-strip-types --test scripts/reader-layout.test.mjs",
     "typecheck": "tsc --noEmit",
     "ios": "expo run:ios",
     "web": "expo start --web"

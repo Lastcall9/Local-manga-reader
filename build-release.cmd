@@ -3,7 +3,7 @@ setlocal
 
 set "PROJECT=C:\Users\server\local-manga-reader"
 set "SDK=C:\Users\server\AppData\Local\Android\Sdk"
-set "VERSION=1.0.9-zip-cbz-support"
+set "VERSION=1.0.13-reader-position-fix"
 set "APK_NAME=local-manga-reader-v%VERSION%-arm64.apk"
 
 set "ANDROID_HOME=%SDK%"

@@ -421,7 +421,7 @@ function MangaReaderApp() {
 
   const openReader = useCallback(
     (book: Book, chapterIndex?: number, pageIndex?: number) => {
-      const saved = progress[book.id] ?? { chapterIndex: 0, pageIndex: 0 };
+      const saved = progressRef.current[book.id] ?? { chapterIndex: 0, pageIndex: 0 };
       const nextChapterIndex = Math.min(chapterIndex ?? saved.chapterIndex, book.chapters.length - 1);
       const chapter = book.chapters[nextChapterIndex];
       const nextPageIndex = Math.min(pageIndex ?? saved.pageIndex, chapter.pages.length - 1);
@@ -433,7 +433,7 @@ function MangaReaderApp() {
         pageIndex: Math.max(0, nextPageIndex),
       });
     },
-    [progress],
+    [],
   );
 
   const continueReading = useCallback(() => {
